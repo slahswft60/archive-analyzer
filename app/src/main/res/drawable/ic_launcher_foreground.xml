@@ -1,0 +1,38 @@
+<vector xmlns:android="http://schemas.android.com/apk/res/android"
+    android:width="108dp"
+    android:height="108dp"
+    android:viewportWidth="108"
+    android:viewportHeight="108">
+    <!-- Outer archive box container -->
+    <path
+        android:fillColor="#FFFFFF"
+        android:pathData="M30,30 h48 c2.2,0 4,1.8 4,4 v40 c0,2.2 -1.8,4 -4,4 H30 c-2.2,0 -4,-1.8 -4,-4 V34 c0,-2.2 1.8,-4 4,-4 z" />
+    <!-- Archive lid / header line -->
+    <path
+        android:fillColor="#0B57D0"
+        android:pathData="M26,42 h56 v4 H26 z" />
+    <!-- Zipper teeth pattern down the center -->
+    <path
+        android:fillColor="#0B57D0"
+        android:pathData="M52,32 h5 v3 h-5 z" />
+    <path
+        android:fillColor="#0B57D0"
+        android:pathData="M51,36 h5 v3 h-5 z" />
+    <path
+        android:fillColor="#0B57D0"
+        android:pathData="M52,40 h5 v3 h-5 z" />
+    <!-- Downward selective extraction arrow badge -->
+    <path
+        android:fillColor="#00639B"
+        android:pathData="M42,54 h24 v4 H42 z" />
+    <path
+        android:fillColor="#0B57D0"
+        android:pathData="M54,48 L54,64 M48,58 L54,64 L60,58"
+        android:strokeWidth="3.5"
+        android:strokeColor="#0B57D0"
+        android:strokeLineCap="round"
+        android:strokeLineJoin="round" />
+    <path
+        android:fillColor="#00639B"
+        android:pathData="M46,69 h16 v3 H46 z" />
+</vector>

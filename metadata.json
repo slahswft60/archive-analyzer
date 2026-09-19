@@ -1,0 +1,7 @@
+{
+  "name": "Archive Analyzer",
+  "description": "Remote ZIP and TAR archive analyzer and selective extractor using HTTP Range requests",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
+

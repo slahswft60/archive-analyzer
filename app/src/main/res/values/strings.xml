@@ -1,0 +1,13 @@
+<resources>
+    <string name="app_name">Archive Analyzer</string>
+    <string name="title_remote_analyzer">Remote Archive Analyzer</string>
+    <string name="hint_archive_url">Enter direct archive URL (ZIP or TAR)</string>
+    <string name="btn_analyze">Analyze</string>
+    <string name="btn_download_file">Download</string>
+    <string name="label_files_found">%1$d files found</string>
+    <string name="label_archive_size">Archive Size: %1$s</string>
+    <string name="status_analyzing">Analyzing remote archive via HTTP Range…</string>
+    <string name="status_downloading">Downloading byte range…</string>
+    <string name="status_decompressing">Decompressing LZ4 payload…</string>
+    <string name="status_success">File saved successfully!</string>
+</resources>
