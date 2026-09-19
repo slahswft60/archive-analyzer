@@ -23,6 +23,7 @@ public class LocalArchiveServer {
     private int port = -1;
     private byte[] demoZipData;
     private byte[] demoTarData;
+    private byte[] demoBootImgRaw;
     private boolean isRunning = false;
 
     public static synchronized LocalArchiveServer getInstance() {
@@ -58,6 +59,10 @@ public class LocalArchiveServer {
 
     public String getDemoTarUrl() {
         return "http://127.0.0.1:" + port + "/demo_rom_archive.tar";
+    }
+
+    public String getCloudWorkerBaseUrl() {
+        return "http://127.0.0.1:" + port + "/cloud-unpack";
     }
 
     private void runServer() {
@@ -103,6 +108,21 @@ public class LocalArchiveServer {
                             }
                         }
                     }
+                }
+
+                if (path.startsWith("/cloud-unpack")) {
+                    // Simulates the cloud unpacking worker: serves ONLY the extracted boot image file
+                    byte[] payload = demoBootImgRaw != null ? demoBootImgRaw : "ANDROID!_BOOT_IMG_RAW_DATA".getBytes(StandardCharsets.UTF_8);
+                    String resp = "HTTP/1.1 200 OK\r\n" +
+                            "Content-Type: application/octet-stream\r\n" +
+                            "Content-Disposition: attachment; filename=\"boot.img\"\r\n" +
+                            "Content-Length: " + payload.length + "\r\n" +
+                            "Accept-Ranges: bytes\r\n" +
+                            "Connection: close\r\n\r\n";
+                    out.write(resp.getBytes(StandardCharsets.US_ASCII));
+                    out.write(payload);
+                    out.flush();
+                    return;
                 }
 
                 byte[] data = path.contains(".tar") ? demoTarData : demoZipData;
@@ -169,6 +189,7 @@ public class LocalArchiveServer {
         }
         bootImgStream.write(pad);
         byte[] bootImgRaw = bootImgStream.toByteArray();
+        demoBootImgRaw = bootImgRaw;
 
         // 2. Create valid LZ4 Frame format for boot.img.lz4
         byte[] bootImgLz4 = createLz4Frame(bootImgRaw);

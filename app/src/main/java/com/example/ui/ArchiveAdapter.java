@@ -87,6 +87,7 @@ public class ArchiveAdapter extends RecyclerView.Adapter<ArchiveAdapter.ViewHold
         private final TextView badgeSize;
         private final TextView badgeFormat;
         private final TextView badgeLz4;
+        private final TextView badgeCloud;
         private final MaterialButton btnAnalyzeTar;
         private final MaterialButton btnDownload;
 
@@ -98,6 +99,7 @@ public class ArchiveAdapter extends RecyclerView.Adapter<ArchiveAdapter.ViewHold
             badgeSize = itemView.findViewById(R.id.badge_size);
             badgeFormat = itemView.findViewById(R.id.badge_format);
             badgeLz4 = itemView.findViewById(R.id.badge_lz4);
+            badgeCloud = itemView.findViewById(R.id.badge_cloud);
             btnAnalyzeTar = itemView.findViewById(R.id.btn_analyze_tar_entry);
             btnDownload = itemView.findViewById(R.id.btn_download_entry);
         }
@@ -119,6 +121,13 @@ public class ArchiveAdapter extends RecyclerView.Adapter<ArchiveAdapter.ViewHold
                 badgeLz4.setVisibility(View.VISIBLE);
             } else {
                 badgeLz4.setVisibility(View.GONE);
+            }
+
+            // Highlight nested partition files that can benefit from Cloud Unpacking
+            if (entry.getParentArchiveEntry() != null && entry.isFirmwareImage()) {
+                badgeCloud.setVisibility(View.VISIBLE);
+            } else {
+                badgeCloud.setVisibility(View.GONE);
             }
 
             if (entry.isDirectory()) {

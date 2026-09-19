@@ -110,6 +110,21 @@
                 android:textStyle="bold"
                 android:visibility="gone"
                 tools:visibility="visible" />
+
+            <TextView
+                android:id="@+id/badge_cloud"
+                android:layout_width="wrap_content"
+                android:layout_height="wrap_content"
+                android:layout_marginStart="6dp"
+                android:background="@drawable/badge_purple_bg"
+                android:paddingHorizontal="6dp"
+                android:paddingVertical="2dp"
+                android:text="Cloud Unpack Ready"
+                android:textColor="@color/accent_purple"
+                android:textSize="11sp"
+                android:textStyle="bold"
+                android:visibility="gone"
+                tools:visibility="visible" />
         </LinearLayout>
 
         <LinearLayout

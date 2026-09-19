@@ -26,6 +26,7 @@ import androidx.recyclerview.widget.LinearLayoutManager;
 import androidx.recyclerview.widget.RecyclerView;
 
 import com.example.model.ArchiveEntry;
+import com.example.network.CloudUnpackManager;
 import com.example.network.HttpRangeClient;
 import com.example.network.LocalArchiveServer;
 import com.example.parser.RemoteTarParser;
@@ -56,6 +57,8 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
     private MaterialButton btnPaste;
     private Chip chipSampleZip;
     private Chip chipSampleTar;
+    private Chip chipCloudSettings;
+    private CloudUnpackManager cloudUnpackManager;
 
     private MaterialCardView cardNestedNav;
     private MaterialButton btnBackToParentArchive;
@@ -125,6 +128,7 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
         });
 
         initViews();
+        cloudUnpackManager = new CloudUnpackManager(this);
         setupListeners();
     }
 
@@ -134,6 +138,7 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
         btnPaste = findViewById(R.id.btn_paste);
         chipSampleZip = findViewById(R.id.chip_sample_zip);
         chipSampleTar = findViewById(R.id.chip_sample_tar);
+        chipCloudSettings = findViewById(R.id.chip_cloud_settings);
 
         cardNestedNav = findViewById(R.id.card_nested_nav);
         btnBackToParentArchive = findViewById(R.id.btn_back_to_parent_archive);
@@ -207,6 +212,8 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
             editArchiveUrl.setText(demoUrl);
             startRemoteAnalysis(demoUrl);
         });
+
+        chipCloudSettings.setOnClickListener(v -> showCloudSettingsDialog());
 
         btnBackToParentArchive.setOnClickListener(v -> navigateBackToParentArchive());
 
@@ -531,17 +538,145 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
             String parentCompSize = parent.getFormattedCompressedSize();
 
             new AlertDialog.Builder(this)
-                    .setTitle("Streaming Nested Extraction")
-                    .setMessage("To extract " + targetName + " (" + targetSize + "), we need to download and decompress " +
-                            parentName + " (" + parentCompSize + ") temporarily.\n\n" +
-                            "Only " + targetName + " will be saved to your Downloads directory. Proceed?")
-                    .setPositiveButton("Proceed", (dialog, which) -> performStreamingNestedExtraction(entry, parent))
+                    .setTitle("Extract " + targetName)
+                    .setMessage("How would you like to extract " + targetName + " (" + targetSize + ") from " + parentName + " (" + parentCompSize + ")?\n\n" +
+                            "• Cloud Unpack (0% ROM Data Transfer): The cloud worker decompresses the ROM at datacenter speed and sends only " + targetName + " to your device.\n\n" +
+                            "• Local Streaming: Your device downloads and stream-decompresses the archive sequentially until finding " + targetName + ".")
+                    .setPositiveButton("☁️ Cloud Unpack (64 MB only)", (dialog, which) -> performCloudUnpackExtraction(entry, parent))
+                    .setNeutralButton("📱 Local Stream", (dialog, which) -> performStreamingNestedExtraction(entry, parent))
                     .setNegativeButton("Cancel", null)
                     .show();
             return;
         }
 
         performDownload(entry);
+    }
+
+    private void showCloudSettingsDialog() {
+        View dialogView = getLayoutInflater().inflate(R.layout.dialog_cloud_settings, null);
+        com.google.android.material.materialswitch.MaterialSwitch switchDefault = dialogView.findViewById(R.id.switch_cloud_default);
+        TextInputEditText editWorkerUrl = dialogView.findViewById(R.id.edit_worker_url);
+
+        switchDefault.setChecked(cloudUnpackManager.isUseCloudByDefault());
+        editWorkerUrl.setText(cloudUnpackManager.getCustomWorkerUrl());
+
+        new AlertDialog.Builder(this)
+                .setView(dialogView)
+                .setPositiveButton("Save", (dialog, which) -> {
+                    cloudUnpackManager.setUseCloudByDefault(switchDefault.isChecked());
+                    String newUrl = editWorkerUrl.getText() != null ? editWorkerUrl.getText().toString().trim() : "";
+                    cloudUnpackManager.setCustomWorkerUrl(newUrl);
+                    Toast.makeText(this, "Cloud Unpack settings saved", Toast.LENGTH_SHORT).show();
+                })
+                .setNegativeButton("Cancel", null)
+                .show();
+    }
+
+    private void performCloudUnpackExtraction(ArchiveEntry targetEntry, ArchiveEntry parentZipEntry) {
+        activeCancelSignal.set(false);
+        cardDownloadProgress.setVisibility(View.VISIBLE);
+        layoutDownloadActiveControls.setVisibility(View.VISIBLE);
+        btnCancelDownload.setEnabled(true);
+        imgDownloadStatusIcon.setImageResource(R.drawable.ic_cloud_download);
+        imgDownloadStatusIcon.setColorFilter(getColor(R.color.accent_purple));
+        txtDownloadFilename.setText("Cloud Unpacking " + targetEntry.getSimpleFileName());
+        txtDownloadStage.setText("Requesting Cloud Worker to unpack partition (0 MB phone ROM data transfer)...");
+        progressDownload.setIndeterminate(true);
+        layoutDownloadSuccessActions.setVisibility(View.GONE);
+        btnCloseDownloadCard.setVisibility(View.GONE);
+
+        String cloudUrl = cloudUnpackManager.buildCloudUnpackUrl(
+                currentRemoteFile.getResolvedUrl(),
+                parentZipEntry.getSimpleFileName(),
+                targetEntry.getSimpleFileName()
+        );
+
+        File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (downloadDir == null || !downloadDir.exists()) {
+            downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        }
+        if (downloadDir == null) {
+            downloadDir = getFilesDir();
+        }
+
+        File targetDir = downloadDir;
+
+        executor.execute(() -> {
+            try {
+                // Download directly from Cloud Worker endpoint - transfer only the target partition size
+                File destFile = new File(targetDir, targetEntry.getSimpleFileName());
+                if (destFile.exists()) {
+                    destFile.delete();
+                }
+
+                okhttp3.Request request = new okhttp3.Request.Builder()
+                        .url(cloudUrl)
+                        .header("User-Agent", "ArchiveAnalyzer-CloudUnpack/1.0")
+                        .build();
+
+                try (okhttp3.Response response = new okhttp3.OkHttpClient().newCall(request).execute()) {
+                    if (!response.isSuccessful()) {
+                        throw new IOException("Cloud Unpack request failed with HTTP " + response.code() + ": " + response.message());
+                    }
+
+                    okhttp3.ResponseBody body = response.body();
+                    if (body == null) {
+                        throw new IOException("Empty response body from Cloud Unpack service");
+                    }
+
+                    long contentLength = body.contentLength();
+                    long downloaded = 0;
+
+                    try (java.io.InputStream in = body.byteStream();
+                         java.io.FileOutputStream fos = new java.io.FileOutputStream(destFile)) {
+                        byte[] buffer = new byte[32 * 1024];
+                        int read;
+                        while ((read = in.read(buffer)) != -1) {
+                            if (activeCancelSignal.get()) {
+                                destFile.delete();
+                                throw new IOException("Cloud unpack cancelled by user");
+                            }
+                            fos.write(buffer, 0, read);
+                            downloaded += read;
+                            long finalDownloaded = downloaded;
+                            mainHandler.post(() -> {
+                                if (contentLength > 0) {
+                                    progressDownload.setIndeterminate(false);
+                                    int pct = (int) Math.min(100, (finalDownloaded * 100) / contentLength);
+                                    progressDownload.setProgress(pct);
+                                    txtDownloadStage.setText("Downloaded " + ArchiveEntry.formatBytes(finalDownloaded) + " / " + ArchiveEntry.formatBytes(contentLength) + " (From Cloud Unpack)");
+                                } else {
+                                    txtDownloadStage.setText("Received " + ArchiveEntry.formatBytes(finalDownloaded) + " from Cloud Worker...");
+                                }
+                            });
+                        }
+                        fos.flush();
+                    }
+                }
+
+                lastDownloadedFile = destFile;
+                mainHandler.post(() -> {
+                    layoutDownloadActiveControls.setVisibility(View.GONE);
+                    onDownloadSuccess(targetEntry, destFile);
+                });
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                mainHandler.post(() -> {
+                    layoutDownloadActiveControls.setVisibility(View.GONE);
+                    if (activeCancelSignal.get()) {
+                        txtDownloadFilename.setText("Cancelled");
+                        txtDownloadStage.setText("Cloud extraction was cancelled by user.");
+                        progressDownload.setIndeterminate(false);
+                        progressDownload.setProgress(0);
+                        btnCloseDownloadCard.setVisibility(View.VISIBLE);
+                        Toast.makeText(this, "Extraction cancelled", Toast.LENGTH_SHORT).show();
+                    } else {
+                        onDownloadFailure(targetEntry, "Cloud Unpack Error: " + e.getMessage());
+                    }
+                });
+            }
+        });
     }
 
     private void performStreamingNestedExtraction(ArchiveEntry targetEntry, ArchiveEntry parentZipEntry) {
