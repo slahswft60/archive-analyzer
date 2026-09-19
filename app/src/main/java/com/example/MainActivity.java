@@ -91,10 +91,21 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
     @Override
     protected void onCreate(Bundle savedInstanceState) {
         super.onCreate(savedInstanceState);
+        
+        Thread.setDefaultUncaughtExceptionHandler((thread, throwable) -> {
+            android.util.Log.e("ArchiveAnalyzer", "Uncaught exception in thread " + thread.getName(), throwable);
+        });
+
         setContentView(R.layout.activity_main);
 
-        // Start embedded local test archive server in background
-        executor.execute(() -> LocalArchiveServer.getInstance().start());
+        // Start embedded local test archive server safely in background
+        executor.execute(() -> {
+            try {
+                LocalArchiveServer.getInstance().start();
+            } catch (Throwable t) {
+                android.util.Log.e("ArchiveAnalyzer", "Local server initialization skipped/failed: " + t.getMessage());
+            }
+        });
 
         initViews();
         setupListeners();
@@ -374,7 +385,7 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
         }
 
         txtDownloadFilename.setText("Saved: " + extractedFile.getName() + decompNote);
-        txtDownloadStage.setText("Size: " + ArchiveEntry.formatBytes(extractedFile.length()) + " • Saved to device Downloads");
+        txtDownloadStage.setText("Path: " + extractedFile.getAbsolutePath() + "\nSize: " + ArchiveEntry.formatBytes(extractedFile.length()));
         layoutDownloadSuccessActions.setVisibility(View.VISIBLE);
         btnCloseDownloadCard.setVisibility(View.VISIBLE);
 

@@ -398,7 +398,7 @@
                         android:layout_height="28dp"
                         android:background="?attr/selectableItemBackgroundBorderless"
                         android:contentDescription="Close"
-                        android:src="@android:drawable/ic_menu_close_clear_cancel"
+                        android:src="@drawable/ic_close"
                         android:visibility="gone"
                         app:tint="@color/on_surface_variant"
                         tools:visibility="visible" />
