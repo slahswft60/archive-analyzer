@@ -30,6 +30,7 @@ import com.example.network.HttpRangeClient;
 import com.example.network.LocalArchiveServer;
 import com.example.parser.RemoteTarParser;
 import com.example.parser.RemoteZipParser;
+import com.example.parser.StreamingTarExtractor;
 import com.example.ui.ArchiveAdapter;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
@@ -46,6 +47,7 @@ import java.util.List;
 import java.util.Locale;
 import java.util.concurrent.ExecutorService;
 import java.util.concurrent.Executors;
+import java.util.concurrent.atomic.AtomicBoolean;
 
 public class MainActivity extends AppCompatActivity implements ArchiveAdapter.OnEntryClickListener {
 
@@ -85,6 +87,10 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
     private MaterialButton btnShareExtracted;
     private MaterialButton btnOpenExtracted;
     private ImageButton btnCloseDownloadCard;
+    private MaterialButton btnCancelDownload;
+    private LinearLayout layoutDownloadActiveControls;
+
+    private final AtomicBoolean activeCancelSignal = new AtomicBoolean(false);
 
     private final HttpRangeClient httpClient = new HttpRangeClient();
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
@@ -158,6 +164,8 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
         btnShareExtracted = findViewById(R.id.btn_share_extracted);
         btnOpenExtracted = findViewById(R.id.btn_open_extracted);
         btnCloseDownloadCard = findViewById(R.id.btn_close_download_card);
+        btnCancelDownload = findViewById(R.id.btn_cancel_download);
+        layoutDownloadActiveControls = findViewById(R.id.layout_download_active_controls);
 
         recyclerArchiveContents.setLayoutManager(new LinearLayoutManager(this));
         adapter = new ArchiveAdapter(this);
@@ -216,6 +224,12 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
         });
 
         btnCloseDownloadCard.setOnClickListener(v -> cardDownloadProgress.setVisibility(View.GONE));
+
+        btnCancelDownload.setOnClickListener(v -> {
+            activeCancelSignal.set(true);
+            txtDownloadStage.setText("Cancelling extraction...");
+            btnCancelDownload.setEnabled(false);
+        });
 
         btnOpenExtracted.setOnClickListener(v -> {
             if (lastDownloadedFile != null && lastDownloadedFile.exists()) {
@@ -364,33 +378,58 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
                     dataStartOffset = zipParser.resolveEntryDataOffset(resolvedUrl, tarEntry);
                 }
 
-                // Check compression method
-                if (tarEntry.getCompressionMethod() > 0 && tarEntry.getCompressionMethod() != -1) {
-                    throw new IOException("The file " + tarEntry.getSimpleFileName() +
-                            " is stored with ZIP Deflate compression (method " + tarEntry.getCompressionMethod() +
-                            "). Remote nested TAR parsing requires Stored (uncompressed) entry to seek byte offsets directly.");
+                // Check compression method:
+                // If Stored (method 0), we can seek and read headers using fast 64KB HTTP Range requests.
+                // If Deflate (method 8), we stream-decompress on the fly to read TAR headers without saving to disk.
+                List<ArchiveEntry> nestedEntries;
+
+                if (tarEntry.getCompressionMethod() == 8) {
+                    mainHandler.post(() -> setLoading(true, "Scanning compressed TAR remotely...",
+                            "Decompressing Deflate stream in real time (headers only, 0 bytes saved to disk)..."));
+
+                    StreamingTarExtractor streamingScanner = new StreamingTarExtractor(httpClient);
+                    AtomicBoolean scanCancel = new AtomicBoolean(false);
+                    nestedEntries = streamingScanner.scanTarEntriesFromCompressedStream(
+                            resolvedUrl,
+                            tarEntry,
+                            scanCancel,
+                            new StreamingTarExtractor.StreamScanListener() {
+                                @Override
+                                public void onScanProgress(long downloadedBytes, long totalCompressedBytes, String statusMessage) {
+                                    mainHandler.post(() -> txtLoadingSubmessage.setText(statusMessage));
+                                }
+
+                                @Override
+                                public void onEntryFound(int count, String fileName) {
+                                    mainHandler.post(() -> txtLoadingSubmessage.setText("Found: " + fileName + " (" + count + " items)..."));
+                                }
+                            }
+                    );
+                } else {
+                    long tarLength = tarEntry.getUncompressedSize();
+
+                    // Check for TAR headers in first 8KB
+                    RemoteTarParser tarParser = new RemoteTarParser(httpClient);
+                    boolean isValidTar = tarParser.verifyTarHeader(resolvedUrl, dataStartOffset);
+                    if (!isValidTar) {
+                        throw new IOException("The entry " + tarEntry.getSimpleFileName() +
+                                " does not contain a standard TAR/ustar header at byte offset " + dataStartOffset);
+                    }
+
+                    mainHandler.post(() -> setLoading(true, "Reading TAR blocks remotely...",
+                            "Parsing nested headers using 64KB HTTP Range requests..."));
+
+                    nestedEntries = tarParser.parseTarAtOffset(
+                            resolvedUrl,
+                            dataStartOffset,
+                            tarLength,
+                            (count, fileName, offset) -> mainHandler.post(() ->
+                                    txtLoadingSubmessage.setText("Found: " + fileName + " (" + count + " items)..."))
+                    );
+                    for (ArchiveEntry e : nestedEntries) {
+                        e.setParentArchiveEntry(tarEntry);
+                    }
                 }
-
-                long tarLength = tarEntry.getUncompressedSize();
-
-                // Check for TAR headers in first 8KB
-                RemoteTarParser tarParser = new RemoteTarParser(httpClient);
-                boolean isValidTar = tarParser.verifyTarHeader(resolvedUrl, dataStartOffset);
-                if (!isValidTar) {
-                    throw new IOException("The entry " + tarEntry.getSimpleFileName() +
-                            " does not contain a standard TAR/ustar header at byte offset " + dataStartOffset);
-                }
-
-                mainHandler.post(() -> setLoading(true, "Reading TAR blocks remotely...",
-                        "Parsing nested headers using 64KB HTTP Range requests..."));
-
-                List<ArchiveEntry> nestedEntries = tarParser.parseTarAtOffset(
-                        resolvedUrl,
-                        dataStartOffset,
-                        tarLength,
-                        (count, fileName, offset) -> mainHandler.post(() ->
-                                txtLoadingSubmessage.setText("Found: " + fileName + " (" + count + " items)..."))
-                );
 
                 mainHandler.post(() -> onNestedTarAnalysisSuccess(tarEntry, nestedEntries));
 
@@ -482,11 +521,123 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
             return;
         }
 
+        // Streaming nested extraction check:
+        // When entry is a firmware image (.img/.bin or .lz4) inside a nested compressed TAR (.tar.md5 inside ZIP):
+        ArchiveEntry parent = entry.getParentArchiveEntry() != null ? entry.getParentArchiveEntry() : currentNestedTarEntry;
+        if (parent != null && parent.isTarMd5() && parent.getCompressionMethod() == 8 && entry.isFirmwareImage()) {
+            String targetName = entry.getSimpleFileName();
+            String targetSize = entry.getFormattedSize();
+            String parentName = parent.getSimpleFileName();
+            String parentCompSize = parent.getFormattedCompressedSize();
+
+            new AlertDialog.Builder(this)
+                    .setTitle("Streaming Nested Extraction")
+                    .setMessage("To extract " + targetName + " (" + targetSize + "), we need to download and decompress " +
+                            parentName + " (" + parentCompSize + ") temporarily.\n\n" +
+                            "Only " + targetName + " will be saved to your Downloads directory. Proceed?")
+                    .setPositiveButton("Proceed", (dialog, which) -> performStreamingNestedExtraction(entry, parent))
+                    .setNegativeButton("Cancel", null)
+                    .show();
+            return;
+        }
+
         performDownload(entry);
     }
 
-    private void performDownload(ArchiveEntry entry) {
+    private void performStreamingNestedExtraction(ArchiveEntry targetEntry, ArchiveEntry parentZipEntry) {
+        activeCancelSignal.set(false);
         cardDownloadProgress.setVisibility(View.VISIBLE);
+        layoutDownloadActiveControls.setVisibility(View.VISIBLE);
+        btnCancelDownload.setEnabled(true);
+        imgDownloadStatusIcon.setImageResource(R.drawable.ic_download);
+        imgDownloadStatusIcon.setColorFilter(getColor(R.color.primary));
+        txtDownloadFilename.setText("Streaming " + targetEntry.getSimpleFileName());
+        txtDownloadStage.setText("Downloaded: 0 B / " + parentZipEntry.getFormattedCompressedSize() + " (Reading headers...)");
+        progressDownload.setIndeterminate(true);
+        layoutDownloadSuccessActions.setVisibility(View.GONE);
+        btnCloseDownloadCard.setVisibility(View.GONE);
+
+        File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (downloadDir == null || !downloadDir.exists()) {
+            downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        }
+        if (downloadDir == null) {
+            downloadDir = getFilesDir();
+        }
+
+        File targetDir = downloadDir;
+
+        executor.execute(() -> {
+            try {
+                StreamingTarExtractor extractor = new StreamingTarExtractor(httpClient);
+                File extractedFile = extractor.extractSingleEntryFromCompressedTar(
+                        currentRemoteFile.getResolvedUrl(),
+                        parentZipEntry,
+                        targetEntry.getSimpleFileName(),
+                        targetDir,
+                        activeCancelSignal,
+                        new StreamingTarExtractor.StreamExtractListener() {
+                            @Override
+                            public void onDownloadProgress(long downloadedBytes, long totalCompressedBytes, String statusMessage) {
+                                mainHandler.post(() -> {
+                                    txtDownloadStage.setText(statusMessage);
+                                    if (totalCompressedBytes > 0) {
+                                        progressDownload.setIndeterminate(false);
+                                        int pct = (int) Math.min(100, (downloadedBytes * 100) / totalCompressedBytes);
+                                        progressDownload.setProgress(pct);
+                                    }
+                                });
+                            }
+
+                            @Override
+                            public void onFileDiscovered(String fileName, String statusMessage) {
+                                mainHandler.post(() -> txtDownloadStage.setText(statusMessage));
+                            }
+
+                            @Override
+                            public void onExtractProgress(long bytesWritten, long totalFileSize, String statusMessage) {
+                                mainHandler.post(() -> {
+                                    txtDownloadStage.setText(statusMessage);
+                                    if (totalFileSize > 0) {
+                                        progressDownload.setIndeterminate(false);
+                                        int pct = (int) Math.min(100, (bytesWritten * 100) / totalFileSize);
+                                        progressDownload.setProgress(pct);
+                                    }
+                                });
+                            }
+                        }
+                );
+
+                lastDownloadedFile = extractedFile;
+                mainHandler.post(() -> {
+                    layoutDownloadActiveControls.setVisibility(View.GONE);
+                    onDownloadSuccess(targetEntry, extractedFile);
+                });
+
+            } catch (Exception e) {
+                e.printStackTrace();
+                mainHandler.post(() -> {
+                    layoutDownloadActiveControls.setVisibility(View.GONE);
+                    if (activeCancelSignal.get()) {
+                        txtDownloadFilename.setText("Cancelled");
+                        txtDownloadStage.setText("Extraction was cancelled by user.");
+                        progressDownload.setIndeterminate(false);
+                        progressDownload.setProgress(0);
+                        btnCloseDownloadCard.setVisibility(View.VISIBLE);
+                        Toast.makeText(this, "Extraction cancelled", Toast.LENGTH_SHORT).show();
+                    } else {
+                        onDownloadFailure(targetEntry, e.getMessage());
+                    }
+                });
+            }
+        });
+    }
+
+    private void performDownload(ArchiveEntry entry) {
+        activeCancelSignal.set(false);
+        cardDownloadProgress.setVisibility(View.VISIBLE);
+        layoutDownloadActiveControls.setVisibility(View.VISIBLE);
+        btnCancelDownload.setEnabled(true);
         imgDownloadStatusIcon.setImageResource(R.drawable.ic_download);
         imgDownloadStatusIcon.setColorFilter(getColor(R.color.primary));
         txtDownloadFilename.setText("Extracting " + entry.getSimpleFileName());
@@ -495,7 +646,10 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
         layoutDownloadSuccessActions.setVisibility(View.GONE);
         btnCloseDownloadCard.setVisibility(View.GONE);
 
-        File downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        File downloadDir = Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
+        if (downloadDir == null || !downloadDir.exists()) {
+            downloadDir = getExternalFilesDir(Environment.DIRECTORY_DOWNLOADS);
+        }
         if (downloadDir == null) {
             downloadDir = getFilesDir();
         }
@@ -538,11 +692,26 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
                 }
 
                 lastDownloadedFile = extractedFile;
-                mainHandler.post(() -> onDownloadSuccess(entry, extractedFile));
+                mainHandler.post(() -> {
+                    layoutDownloadActiveControls.setVisibility(View.GONE);
+                    onDownloadSuccess(entry, extractedFile);
+                });
 
             } catch (Exception e) {
                 e.printStackTrace();
-                mainHandler.post(() -> onDownloadFailure(entry, e.getMessage()));
+                mainHandler.post(() -> {
+                    layoutDownloadActiveControls.setVisibility(View.GONE);
+                    if (activeCancelSignal.get()) {
+                        txtDownloadFilename.setText("Cancelled");
+                        txtDownloadStage.setText("Extraction was cancelled by user.");
+                        progressDownload.setIndeterminate(false);
+                        progressDownload.setProgress(0);
+                        btnCloseDownloadCard.setVisibility(View.VISIBLE);
+                        Toast.makeText(this, "Extraction cancelled", Toast.LENGTH_SHORT).show();
+                    } else {
+                        onDownloadFailure(entry, e.getMessage());
+                    }
+                });
             }
         });
     }

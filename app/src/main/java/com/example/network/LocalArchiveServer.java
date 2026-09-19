@@ -217,7 +217,14 @@ public class LocalArchiveServer {
             zos.write(tarMd5Payload);
             zos.closeEntry();
 
-            // Entry 4: recovery.img.lz4
+            // Entry 4: Nested Deflate-compressed Samsung firmware TAR.MD5 (as required for streaming test)
+            ZipEntry eDeflatedTarMd5 = new ZipEntry("AP_G960USQS9FUA3_CL19871035_QB37106186_REV01_user_low_ship_MULTI_CERT_meta_OS10.tar.md5");
+            // Standard DEFLATED method (method 8)
+            zos.putNextEntry(eDeflatedTarMd5);
+            zos.write(tarMd5Payload);
+            zos.closeEntry();
+
+            // Entry 5: recovery.img.lz4
             ZipEntry e3 = new ZipEntry("images/recovery.img.lz4");
             zos.putNextEntry(e3);
             byte[] recoveryRaw = "RECOVERY_IMAGE_PAYLOAD_V2".getBytes(StandardCharsets.UTF_8);

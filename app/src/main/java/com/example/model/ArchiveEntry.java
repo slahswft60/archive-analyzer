@@ -12,6 +12,7 @@ public class ArchiveEntry {
     private final boolean isDirectory;
     private final String format;
     private final long crc32;
+    private ArchiveEntry parentArchiveEntry;
 
     public ArchiveEntry(String name, long compressedSize, long uncompressedSize,
                         long headerOffset, long dataOffset, int compressionMethod,
@@ -64,6 +65,14 @@ public class ArchiveEntry {
         this.dataOffset = dataOffset;
     }
 
+    public ArchiveEntry getParentArchiveEntry() {
+        return parentArchiveEntry;
+    }
+
+    public void setParentArchiveEntry(ArchiveEntry parentArchiveEntry) {
+        this.parentArchiveEntry = parentArchiveEntry;
+    }
+
     public int getCompressionMethod() {
         return compressionMethod;
     }
@@ -94,6 +103,13 @@ public class ArchiveEntry {
         if (name == null) return false;
         String lower = name.toLowerCase(Locale.ROOT);
         return lower.endsWith(".tar") || lower.endsWith(".tar.md5");
+    }
+
+    public boolean isFirmwareImage() {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".img") || lower.endsWith(".bin") ||
+               lower.endsWith(".img.lz4") || lower.endsWith(".bin.lz4");
     }
 
     public String getDecompressedTargetName() {

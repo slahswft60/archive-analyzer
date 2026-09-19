@@ -23,6 +23,8 @@
     <color name="accent_orange_container">#FFDBCF</color>
     <color name="accent_purple">#6750A4</color>
     <color name="accent_purple_container">#EADDFF</color>
+    <color name="error">#BA1A1A</color>
+    <color name="error_container">#FFDAD6</color>
 
     <color name="black">#FF000000</color>
     <color name="white">#FFFFFFFF</color>
