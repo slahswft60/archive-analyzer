@@ -252,7 +252,10 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
     }
 
     private void startRemoteAnalysis(String rawUrl) {
-        setLoading(true, "Connecting to remote archive...", "Checking HTTP Range request support...");
+        String initialStage = com.example.network.MediaFireResolver.isMediaFireUrl(rawUrl)
+                ? "Resolving direct link from MediaFire..."
+                : "Connecting to remote archive...";
+        setLoading(true, initialStage, "Checking HTTP Range request support...");
         cardArchiveSummary.setVisibility(View.GONE);
         cardDownloadProgress.setVisibility(View.GONE);
         cardNestedNav.setVisibility(View.GONE);

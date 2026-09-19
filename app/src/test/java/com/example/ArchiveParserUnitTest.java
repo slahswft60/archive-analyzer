@@ -32,6 +32,17 @@ public class ArchiveParserUnitTest {
     }
 
     @Test
+    public void testMediaFireUrlDetection() {
+        String url1 = "https://www.mediafire.com/file/a1b2c3d4e5/firmware.zip/file";
+        String url2 = "http://mediafire.com/download/a1b2c3d4e5";
+        String url3 = "https://example.com/file/test.zip";
+
+        Assert.assertTrue(com.example.network.MediaFireResolver.isMediaFireUrl(url1));
+        Assert.assertTrue(com.example.network.MediaFireResolver.isMediaFireUrl(url2));
+        Assert.assertFalse(com.example.network.MediaFireResolver.isMediaFireUrl(url3));
+    }
+
+    @Test
     public void testArchiveEntryProperties() {
         ArchiveEntry entry = new ArchiveEntry(
                 "firmware/boot.img.lz4",

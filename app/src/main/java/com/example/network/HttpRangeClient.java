@@ -92,6 +92,18 @@ public class HttpRangeClient {
     public RemoteFileInfo probeRemoteFile(String rawUrl) throws IOException {
         String normalized = normalizeUrl(rawUrl);
 
+        // Check if URL is MediaFire sharing link and resolve to direct CDN file link
+        if (MediaFireResolver.isMediaFireUrl(normalized)) {
+            try {
+                String resolvedMediaFire = MediaFireResolver.resolveDirectLink(client, normalized, USER_AGENT);
+                if (resolvedMediaFire != null && !resolvedMediaFire.isEmpty() && !resolvedMediaFire.equals(normalized)) {
+                    normalized = resolvedMediaFire;
+                }
+            } catch (Exception ignored) {
+                // Fall back to probing directly
+            }
+        }
+
         // Try HTTP Range bytes=0-0 first to verify range support and get total size
         Request testRangeRequest = new Request.Builder()
                 .url(normalized)
