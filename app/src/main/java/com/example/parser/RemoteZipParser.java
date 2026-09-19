@@ -206,12 +206,11 @@ public class RemoteZipParser {
         return list;
     }
 
-    public File downloadAndExtractEntry(String resolvedUrl, ArchiveEntry entry,
-                                       File destinationDirectory, HttpRangeClient.ProgressListener progressListener)
-            throws IOException {
+    public long resolveEntryDataOffset(String resolvedUrl, ArchiveEntry entry) throws IOException {
+        if (entry.getDataOffset() > 0) {
+            return entry.getDataOffset();
+        }
         long localHeaderOffset = entry.getHeaderOffset();
-
-        // 1. Read Local File Header (30 bytes fixed) to determine precise start of data
         byte[] lfhFixed = httpClient.fetchRange(resolvedUrl, localHeaderOffset, localHeaderOffset + 29);
         ByteBuffer lfhBuf = ByteBuffer.wrap(lfhFixed);
         lfhBuf.order(ByteOrder.LITTLE_ENDIAN);
@@ -225,8 +224,15 @@ public class RemoteZipParser {
         int localExtraLen = lfhBuf.getShort() & 0xFFFF;
 
         long dataStartOffset = localHeaderOffset + 30 + localNameLen + localExtraLen;
-        long dataEndOffset = dataStartOffset + entry.getCompressedSize() - 1;
         entry.setDataOffset(dataStartOffset);
+        return dataStartOffset;
+    }
+
+    public File downloadAndExtractEntry(String resolvedUrl, ArchiveEntry entry,
+                                       File destinationDirectory, HttpRangeClient.ProgressListener progressListener)
+            throws IOException {
+        long dataStartOffset = resolveEntryDataOffset(resolvedUrl, entry);
+        long dataEndOffset = dataStartOffset + entry.getCompressedSize() - 1;
 
         String targetFileName = entry.getSimpleFileName();
         File tempDownloadedFile = new File(destinationDirectory, targetFileName + ".part");

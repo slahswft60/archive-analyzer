@@ -3,14 +3,16 @@ package com.example;
 import com.example.compression.Lz4Decompressor;
 import com.example.model.ArchiveEntry;
 import com.example.network.HttpRangeClient;
+import com.example.parser.RemoteTarParser;
+import com.example.parser.RemoteZipParser;
 
 import org.junit.Assert;
 import org.junit.Test;
 
-import java.io.ByteArrayInputStream;
 import java.io.ByteArrayOutputStream;
 import java.io.IOException;
 import java.nio.charset.StandardCharsets;
+import java.util.List;
 
 public class ArchiveParserUnitTest {
 
@@ -48,6 +50,36 @@ public class ArchiveParserUnitTest {
         Assert.assertTrue(entry.isLz4());
         Assert.assertFalse(entry.isDirectory());
         Assert.assertTrue(entry.getFormattedSize().contains("MB"));
+    }
+
+    @Test
+    public void testTarMd5Detection() {
+        ArchiveEntry entry = new ArchiveEntry(
+                "AP_A705FXXU5DXD2_CL28391204_QB782910_REV00.tar.md5",
+                5000000000L,
+                5000000000L,
+                1000,
+                1050,
+                0, // Stored
+                false,
+                "ZIP",
+                0
+        );
+
+        Assert.assertTrue(entry.isTarMd5());
+        Assert.assertTrue(entry.isTar());
+        Assert.assertEquals("AP_A705FXXU5DXD2_CL28391204_QB782910_REV00.tar.md5", entry.getSimpleFileName());
+    }
+
+    @Test
+    public void testTarHeaderMagicDetection() {
+        byte[] dummyBlock = new byte[512];
+        System.arraycopy("ustar".getBytes(StandardCharsets.US_ASCII), 0, dummyBlock, 257, 5);
+        byte[] nameBytes = "boot.img.lz4".getBytes(StandardCharsets.UTF_8);
+        System.arraycopy(nameBytes, 0, dummyBlock, 0, nameBytes.length);
+        dummyBlock[156] = '0';
+
+        Assert.assertTrue(RemoteTarParser.isTarBlockHeader(dummyBlock, 0));
     }
 
     @Test

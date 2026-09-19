@@ -143,6 +143,71 @@
             </LinearLayout>
         </com.google.android.material.card.MaterialCardView>
 
+        <!-- TAR Navigation Bar (Visible when browsing nested TAR / TAR.MD5) -->
+        <com.google.android.material.card.MaterialCardView
+            android:id="@+id/card_nested_nav"
+            android:layout_width="match_parent"
+            android:layout_height="wrap_content"
+            android:layout_marginHorizontal="16dp"
+            android:layout_marginBottom="8dp"
+            android:visibility="gone"
+            app:cardBackgroundColor="@color/secondary_container"
+            app:cardCornerRadius="12dp"
+            app:cardElevation="0dp"
+            tools:visibility="visible">
+
+            <LinearLayout
+                android:layout_width="match_parent"
+                android:layout_height="wrap_content"
+                android:gravity="center_vertical"
+                android:orientation="horizontal"
+                android:padding="8dp">
+
+                <com.google.android.material.button.MaterialButton
+                    android:id="@+id/btn_back_to_parent_archive"
+                    style="@style/Widget.Material3.Button.TextButton"
+                    android:layout_width="wrap_content"
+                    android:layout_height="36dp"
+                    android:insetTop="0dp"
+                    android:insetBottom="0dp"
+                    android:paddingHorizontal="8dp"
+                    android:text="Back"
+                    android:textColor="@color/on_secondary_container"
+                    android:textSize="12sp"
+                    app:icon="@drawable/ic_arrow_back"
+                    app:iconSize="18dp"
+                    app:iconTint="@color/on_secondary_container" />
+
+                <LinearLayout
+                    android:layout_width="0dp"
+                    android:layout_height="wrap_content"
+                    android:layout_marginStart="4dp"
+                    android:layout_weight="1"
+                    android:orientation="vertical">
+
+                    <TextView
+                        android:id="@+id/txt_nested_archive_title"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:ellipsize="middle"
+                        android:singleLine="true"
+                        android:textColor="@color/on_secondary_container"
+                        android:textSize="13sp"
+                        android:textStyle="bold"
+                        tools:text="AP_A705FXXU5DXD2.tar.md5" />
+
+                    <TextView
+                        android:id="@+id/txt_nested_archive_subtitle"
+                        android:layout_width="wrap_content"
+                        android:layout_height="wrap_content"
+                        android:text="Parsed remotely inside ZIP via HTTP Range"
+                        android:textColor="@color/on_secondary_container"
+                        android:textSize="11sp" />
+                </LinearLayout>
+
+            </LinearLayout>
+        </com.google.android.material.card.MaterialCardView>
+
         <!-- Archive Summary Card (Visible when loaded) -->
         <com.google.android.material.card.MaterialCardView
             android:id="@+id/card_archive_summary"

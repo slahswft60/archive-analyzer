@@ -84,6 +84,18 @@ public class ArchiveEntry {
         return name != null && name.toLowerCase(Locale.ROOT).endsWith(".lz4");
     }
 
+    public boolean isTarMd5() {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".tar.md5");
+    }
+
+    public boolean isTar() {
+        if (name == null) return false;
+        String lower = name.toLowerCase(Locale.ROOT);
+        return lower.endsWith(".tar") || lower.endsWith(".tar.md5");
+    }
+
     public String getDecompressedTargetName() {
         String base = getSimpleFileName();
         if (isLz4() && base.toLowerCase(Locale.ROOT).endsWith(".lz4")) {

@@ -19,29 +19,95 @@ import okhttp3.ResponseBody;
 public class RemoteTarParser {
 
     private static final int BLOCK_SIZE = 512;
-    private static final int BUFFER_CHUNK_SIZE = 64 * 1024;
+    private static final int BUFFER_CHUNK_SIZE = 64 * 1024; // 64KB chunks to optimize network roundtrips
 
     private final HttpRangeClient httpClient;
+
+    public interface TarParseProgressListener {
+        void onHeaderParsed(int count, String currentFileName, long currentOffset);
+    }
 
     public RemoteTarParser(HttpRangeClient httpClient) {
         this.httpClient = httpClient;
     }
 
+    /**
+     * Parse a standalone TAR archive from the beginning.
+     */
     public List<ArchiveEntry> parseTarArchive(String resolvedUrl, long totalFileSize) throws IOException {
+        return parseTarArchive(resolvedUrl, totalFileSize, null);
+    }
+
+    public List<ArchiveEntry> parseTarArchive(String resolvedUrl, long totalFileSize, TarParseProgressListener listener) throws IOException {
+        return parseTarStream(resolvedUrl, 0, totalFileSize, listener);
+    }
+
+    /**
+     * Parse a TAR archive located at a specific byte offset inside a remote file (such as a uncompressed .tar / .tar.md5 inside a ZIP).
+     */
+    public List<ArchiveEntry> parseTarAtOffset(String resolvedUrl, long baseOffset, long tarLength, TarParseProgressListener listener) throws IOException {
+        return parseTarStream(resolvedUrl, baseOffset, tarLength, listener);
+    }
+
+    /**
+     * Checks if the first block at baseOffset has valid TAR headers (ustar magic at byte 257).
+     */
+    public boolean verifyTarHeader(String resolvedUrl, long baseOffset) {
+        try {
+            // Read 8KB to check first header
+            byte[] initialBytes = httpClient.fetchRange(resolvedUrl, baseOffset, baseOffset + 8191);
+            if (initialBytes.length < BLOCK_SIZE) {
+                return false;
+            }
+            return isTarBlockHeader(initialBytes, 0);
+        } catch (Exception e) {
+            return false;
+        }
+    }
+
+    public static boolean isTarBlockHeader(byte[] buffer, int offset) {
+        if (offset + BLOCK_SIZE > buffer.length) return false;
+        // Check magic at offset + 257 ("ustar")
+        if (buffer[offset + 257] == 'u' &&
+            buffer[offset + 258] == 's' &&
+            buffer[offset + 259] == 't' &&
+            buffer[offset + 260] == 'a' &&
+            buffer[offset + 261] == 'r') {
+            return true;
+        }
+        // Also check if valid non-empty name exists and typeflag is valid
+        String name = readString(buffer, offset, 100);
+        byte typeFlag = buffer[offset + 156];
+        if (!name.isEmpty() && (typeFlag == 0 || (typeFlag >= '0' && typeFlag <= '6'))) {
+            // Check if size field is valid octal
+            long size = readOctal(buffer, offset + 124, 12);
+            return size >= 0;
+        }
+        return false;
+    }
+
+    private List<ArchiveEntry> parseTarStream(String resolvedUrl, long baseOffset, long totalLength, TarParseProgressListener listener) throws IOException {
         List<ArchiveEntry> entries = new ArrayList<>();
-        long currentOffset = 0;
+        long currentOffset = 0; // Relative to baseOffset
+
+        // For .tar.md5 files, the last 32-34 bytes are ASCII md5 checksum ("...  filename\n")
+        long usableTarLength = totalLength;
+        if (usableTarLength > 64) {
+            usableTarLength -= 34; // Don't parse the trailing MD5 trailer as TAR blocks
+        }
 
         byte[] currentBuffer = null;
-        long bufferStartOffset = -1;
+        long bufferStartOffset = -1; // Relative to baseOffset
         long bufferEndOffset = -1;
         int consecutiveZeroBlocks = 0;
 
-        while (currentOffset + BLOCK_SIZE <= totalFileSize) {
-            // Ensure 512-byte header at currentOffset is loaded
+        while (currentOffset + BLOCK_SIZE <= usableTarLength) {
+            // Ensure 512-byte block at currentOffset is cached in currentBuffer
             if (currentBuffer == null || currentOffset < bufferStartOffset || currentOffset + BLOCK_SIZE > bufferEndOffset) {
                 bufferStartOffset = currentOffset;
-                long fetchEnd = Math.min(currentOffset + BUFFER_CHUNK_SIZE - 1, totalFileSize - 1);
-                currentBuffer = httpClient.fetchRange(resolvedUrl, bufferStartOffset, fetchEnd);
+                long fetchStart = baseOffset + bufferStartOffset;
+                long fetchEnd = Math.min(baseOffset + currentOffset + BUFFER_CHUNK_SIZE - 1, baseOffset + usableTarLength - 1);
+                currentBuffer = httpClient.fetchRange(resolvedUrl, fetchStart, fetchEnd);
                 bufferEndOffset = bufferStartOffset + currentBuffer.length;
             }
 
@@ -80,7 +146,6 @@ public class RemoteTarParser {
 
             long fileSize = readOctal(currentBuffer, offsetInBuffer + 124, 12);
             byte typeFlag = currentBuffer[offsetInBuffer + 156];
-            String magic = readString(currentBuffer, offsetInBuffer + 257, 6);
             String prefix = readString(currentBuffer, offsetInBuffer + 345, 155);
 
             String fullPath = rawName;
@@ -90,20 +155,27 @@ public class RemoteTarParser {
 
             boolean isDirectory = (typeFlag == '5') || fullPath.endsWith("/");
 
-            long dataOffset = currentOffset + BLOCK_SIZE;
-            entries.add(new ArchiveEntry(
+            long entryHeaderAbsolute = baseOffset + currentOffset;
+            long dataOffsetAbsolute = entryHeaderAbsolute + BLOCK_SIZE;
+
+            ArchiveEntry entry = new ArchiveEntry(
                     fullPath,
                     fileSize,
                     fileSize,
-                    currentOffset,
-                    dataOffset,
+                    entryHeaderAbsolute,
+                    dataOffsetAbsolute,
                     -1,
                     isDirectory,
                     "TAR",
                     0
-            ));
+            );
+            entries.add(entry);
 
-            // Calculate next entry header offset
+            if (listener != null) {
+                listener.onHeaderParsed(entries.size(), fullPath, entryHeaderAbsolute);
+            }
+
+            // Calculate next entry header offset:
             // In TAR, file data is padded to 512-byte boundaries
             long paddedDataSize = ((fileSize + BLOCK_SIZE - 1) / BLOCK_SIZE) * BLOCK_SIZE;
             currentOffset += BLOCK_SIZE + paddedDataSize;

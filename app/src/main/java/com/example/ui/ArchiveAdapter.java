@@ -21,6 +21,7 @@ public class ArchiveAdapter extends RecyclerView.Adapter<ArchiveAdapter.ViewHold
 
     public interface OnEntryClickListener {
         void onDownloadClick(ArchiveEntry entry);
+        void onAnalyzeTarClick(ArchiveEntry entry);
     }
 
     private final List<ArchiveEntry> allEntries = new ArrayList<>();
@@ -86,6 +87,7 @@ public class ArchiveAdapter extends RecyclerView.Adapter<ArchiveAdapter.ViewHold
         private final TextView badgeSize;
         private final TextView badgeFormat;
         private final TextView badgeLz4;
+        private final MaterialButton btnAnalyzeTar;
         private final MaterialButton btnDownload;
 
         ViewHolder(@NonNull View itemView) {
@@ -96,6 +98,7 @@ public class ArchiveAdapter extends RecyclerView.Adapter<ArchiveAdapter.ViewHold
             badgeSize = itemView.findViewById(R.id.badge_size);
             badgeFormat = itemView.findViewById(R.id.badge_format);
             badgeLz4 = itemView.findViewById(R.id.badge_lz4);
+            btnAnalyzeTar = itemView.findViewById(R.id.btn_analyze_tar_entry);
             btnDownload = itemView.findViewById(R.id.btn_download_entry);
         }
 
@@ -121,17 +124,30 @@ public class ArchiveAdapter extends RecyclerView.Adapter<ArchiveAdapter.ViewHold
             if (entry.isDirectory()) {
                 imgIcon.setImageResource(R.drawable.ic_folder);
                 btnDownload.setVisibility(View.GONE);
+                btnAnalyzeTar.setVisibility(View.GONE);
             } else {
                 btnDownload.setVisibility(View.VISIBLE);
                 if (entry.isLz4()) {
                     imgIcon.setImageResource(R.drawable.ic_archive);
                 } else {
                     String nameLower = entry.getName().toLowerCase(Locale.ROOT);
-                    if (nameLower.endsWith(".zip") || nameLower.endsWith(".tar") || nameLower.endsWith(".gz") || nameLower.endsWith(".bin") || nameLower.endsWith(".img")) {
+                    if (nameLower.endsWith(".zip") || nameLower.endsWith(".tar") || nameLower.endsWith(".tar.md5") || nameLower.endsWith(".gz") || nameLower.endsWith(".bin") || nameLower.endsWith(".img")) {
                         imgIcon.setImageResource(R.drawable.ic_archive);
                     } else {
                         imgIcon.setImageResource(R.drawable.ic_file);
                     }
+                }
+
+                // Show "Analyze TAR" button for .tar or .tar.md5 files
+                if (entry.isTar()) {
+                    btnAnalyzeTar.setVisibility(View.VISIBLE);
+                    btnAnalyzeTar.setOnClickListener(v -> {
+                        if (listener != null) {
+                            listener.onAnalyzeTarClick(entry);
+                        }
+                    });
+                } else {
+                    btnAnalyzeTar.setVisibility(View.GONE);
                 }
             }
 

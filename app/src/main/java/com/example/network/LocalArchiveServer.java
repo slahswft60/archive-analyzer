@@ -173,7 +173,17 @@ public class LocalArchiveServer {
         // 2. Create valid LZ4 Frame format for boot.img.lz4
         byte[] bootImgLz4 = createLz4Frame(bootImgRaw);
 
-        // 3. Build Demo ZIP
+        // 4. Build Demo TAR
+        ByteArrayOutputStream tarBaos = new ByteArrayOutputStream();
+        writeTarEntry(tarBaos, "boot.img.lz4", bootImgLz4);
+        writeTarEntry(tarBaos, "system/build.prop", "ro.build.version.release=15\nro.product.model=Pixel 8\n".getBytes(StandardCharsets.UTF_8));
+        writeTarEntry(tarBaos, "kernel/Image.lz4", createLz4Frame("KERNEL_IMAGE_BINARY_TEST".getBytes(StandardCharsets.UTF_8)));
+        writeTarEntry(tarBaos, "info.txt", "Demo POSIX ustar TAR archive for HTTP Range inspection\n".getBytes(StandardCharsets.UTF_8));
+        // TAR end of file: two 512-byte zero blocks
+        tarBaos.write(new byte[1024]);
+        demoTarData = tarBaos.toByteArray();
+
+        // 3. Build Demo ZIP (now including nested uncompressed .tar.md5 firmware file)
         ByteArrayOutputStream zipBaos = new ByteArrayOutputStream();
         try (ZipOutputStream zos = new ZipOutputStream(zipBaos)) {
             // Entry 1: boot.img.lz4
@@ -190,36 +200,43 @@ public class LocalArchiveServer {
             zos.write(vendorBoot);
             zos.closeEntry();
 
-            // Entry 3: recovery.img.lz4
+            // Entry 3: Nested uncompressed AP_A705FXXU5DXD2.tar.md5 (STORED)
+            byte[] tarMd5Payload = new byte[demoTarData.length + 33];
+            System.arraycopy(demoTarData, 0, tarMd5Payload, 0, demoTarData.length);
+            byte[] md5Trailer = "  AP_A705FXXU5DXD2.tar.md5\n".getBytes(StandardCharsets.US_ASCII);
+            System.arraycopy(md5Trailer, 0, tarMd5Payload, demoTarData.length, Math.min(md5Trailer.length, 33));
+
+            ZipEntry eTarMd5 = new ZipEntry("AP_A705FXXU5DXD2_CL28391204_QB782910_REV00.tar.md5");
+            eTarMd5.setMethod(ZipEntry.STORED);
+            eTarMd5.setSize(tarMd5Payload.length);
+            eTarMd5.setCompressedSize(tarMd5Payload.length);
+            CRC32 crc = new CRC32();
+            crc.update(tarMd5Payload);
+            eTarMd5.setCrc(crc.getValue());
+            zos.putNextEntry(eTarMd5);
+            zos.write(tarMd5Payload);
+            zos.closeEntry();
+
+            // Entry 4: recovery.img.lz4
             ZipEntry e3 = new ZipEntry("images/recovery.img.lz4");
             zos.putNextEntry(e3);
             byte[] recoveryRaw = "RECOVERY_IMAGE_PAYLOAD_V2".getBytes(StandardCharsets.UTF_8);
             zos.write(createLz4Frame(recoveryRaw));
             zos.closeEntry();
 
-            // Entry 4: META-INF/com/google/android/updater-script
+            // Entry 5: META-INF/com/google/android/updater-script
             ZipEntry e4 = new ZipEntry("META-INF/com/google/android/updater-script");
             zos.putNextEntry(e4);
             zos.write("# Android OTA Updater Script\nui_print(\"Flashing firmware...\");\n".getBytes(StandardCharsets.UTF_8));
             zos.closeEntry();
 
-            // Entry 5: README.txt
+            // Entry 6: README.txt
             ZipEntry e5 = new ZipEntry("README.txt");
             zos.putNextEntry(e5);
-            zos.write("Remote Archive Analyzer Demo ZIP Archive\nUses HTTP Range requests to extract single files!\n".getBytes(StandardCharsets.UTF_8));
+            zos.write("Remote Archive Analyzer Demo ZIP Archive\nUses HTTP Range requests to extract single files and nested .tar.md5!\n".getBytes(StandardCharsets.UTF_8));
             zos.closeEntry();
         }
         demoZipData = zipBaos.toByteArray();
-
-        // 4. Build Demo TAR
-        ByteArrayOutputStream tarBaos = new ByteArrayOutputStream();
-        writeTarEntry(tarBaos, "boot.img.lz4", bootImgLz4);
-        writeTarEntry(tarBaos, "system/build.prop", "ro.build.version.release=15\nro.product.model=Pixel 8\n".getBytes(StandardCharsets.UTF_8));
-        writeTarEntry(tarBaos, "kernel/Image.lz4", createLz4Frame("KERNEL_IMAGE_BINARY_TEST".getBytes(StandardCharsets.UTF_8)));
-        writeTarEntry(tarBaos, "info.txt", "Demo POSIX ustar TAR archive for HTTP Range inspection\n".getBytes(StandardCharsets.UTF_8));
-        // TAR end of file: two 512-byte zero blocks
-        tarBaos.write(new byte[1024]);
-        demoTarData = tarBaos.toByteArray();
     }
 
     private byte[] createLz4Frame(byte[] rawData) throws IOException {
