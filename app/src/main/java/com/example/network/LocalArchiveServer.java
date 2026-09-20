@@ -61,6 +61,10 @@ public class LocalArchiveServer {
         return "http://127.0.0.1:" + port + "/demo_rom_archive.tar";
     }
 
+    public String getDemoTarMd5Url() {
+        return "http://127.0.0.1:" + port + "/AP_A705FXXU5DXD2_CL28391204_QB782910_REV00.tar.md5";
+    }
+
     public String getCloudWorkerBaseUrl() {
         return "http://127.0.0.1:" + port + "/cloud-unpack";
     }

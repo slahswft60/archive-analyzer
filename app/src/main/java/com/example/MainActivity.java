@@ -59,6 +59,7 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
     private MaterialButton btnPaste;
     private Chip chipSampleZip;
     private Chip chipSampleTar;
+    private Chip chipSampleTarMd5;
     private Chip chipCloudSettings;
     private CloudUnpackManager cloudUnpackManager;
 
@@ -141,6 +142,7 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
         btnPaste = findViewById(R.id.btn_paste);
         chipSampleZip = findViewById(R.id.chip_sample_zip);
         chipSampleTar = findViewById(R.id.chip_sample_tar);
+        chipSampleTarMd5 = findViewById(R.id.chip_sample_tarmd5);
         chipCloudSettings = findViewById(R.id.chip_cloud_settings);
 
         cardNestedNav = findViewById(R.id.card_nested_nav);
@@ -212,6 +214,12 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
 
         chipSampleTar.setOnClickListener(v -> {
             String demoUrl = LocalArchiveServer.getInstance().getDemoTarUrl();
+            editArchiveUrl.setText(demoUrl);
+            startRemoteAnalysis(demoUrl);
+        });
+
+        chipSampleTarMd5.setOnClickListener(v -> {
+            String demoUrl = LocalArchiveServer.getInstance().getDemoTarMd5Url();
             editArchiveUrl.setText(demoUrl);
             startRemoteAnalysis(demoUrl);
         });
