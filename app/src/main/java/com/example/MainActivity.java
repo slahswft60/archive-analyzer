@@ -32,6 +32,8 @@ import com.example.network.LocalArchiveServer;
 import com.example.parser.RemoteTarParser;
 import com.example.parser.RemoteZipParser;
 import com.example.parser.StreamingTarExtractor;
+import com.example.service.ArchiveHeaderService;
+import com.example.service.ArchiveParseResult;
 import com.example.ui.ArchiveAdapter;
 import com.google.android.material.button.MaterialButton;
 import com.google.android.material.card.MaterialCardView;
@@ -96,6 +98,7 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
     private final AtomicBoolean activeCancelSignal = new AtomicBoolean(false);
 
     private final HttpRangeClient httpClient = new HttpRangeClient();
+    private final ArchiveHeaderService archiveHeaderService = new ArchiveHeaderService(httpClient);
     private final ExecutorService executor = Executors.newSingleThreadExecutor();
     private final Handler mainHandler = new Handler(Looper.getMainLooper());
 
@@ -264,49 +267,23 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
 
         executor.execute(() -> {
             try {
-                HttpRangeClient.RemoteFileInfo fileInfo = httpClient.probeRemoteFile(rawUrl);
-                currentRemoteFile = fileInfo;
+                ArchiveParseResult parseResult = archiveHeaderService.parseRemoteArchive(rawUrl, (stage, details) -> {
+                    mainHandler.post(() -> setLoading(true, stage, details));
+                });
 
-                mainHandler.post(() -> setLoading(true, "Probing archive directory...",
-                        "Total size: " + ArchiveEntry.formatBytes(fileInfo.getContentLength()) + " (reading headers only)"));
+                currentRemoteFile = new HttpRangeClient.RemoteFileInfo(
+                        parseResult.getOriginalUrl(),
+                        parseResult.getResolvedUrl(),
+                        parseResult.getTotalFileSize(),
+                        parseResult.isSupportsRange()
+                );
 
-                List<ArchiveEntry> entries = null;
-                String detectedFormat = "ZIP";
+                currentArchiveType = parseResult.getArchiveTypeString();
+                parentArchiveFormat = currentArchiveType;
+                List<ArchiveEntry> finalEntries = parseResult.getEntries();
+                String finalFormat = currentArchiveType;
 
-                // Auto-detect format based on URL or try ZIP then TAR
-                String urlLower = rawUrl.toLowerCase(Locale.ROOT);
-                boolean isTarHint = urlLower.contains(".tar");
-
-                if (isTarHint) {
-                    try {
-                        RemoteTarParser tarParser = new RemoteTarParser(httpClient);
-                        entries = tarParser.parseTarArchive(fileInfo.getResolvedUrl(), fileInfo.getContentLength());
-                        detectedFormat = "TAR";
-                    } catch (Exception e) {
-                        // Fallback to ZIP
-                        RemoteZipParser zipParser = new RemoteZipParser(httpClient);
-                        entries = zipParser.parseCentralDirectory(fileInfo.getResolvedUrl(), fileInfo.getContentLength());
-                        detectedFormat = "ZIP";
-                    }
-                } else {
-                    try {
-                        RemoteZipParser zipParser = new RemoteZipParser(httpClient);
-                        entries = zipParser.parseCentralDirectory(fileInfo.getResolvedUrl(), fileInfo.getContentLength());
-                        detectedFormat = "ZIP";
-                    } catch (Exception e) {
-                        // Fallback to TAR
-                        RemoteTarParser tarParser = new RemoteTarParser(httpClient);
-                        entries = tarParser.parseTarArchive(fileInfo.getResolvedUrl(), fileInfo.getContentLength());
-                        detectedFormat = "TAR";
-                    }
-                }
-
-                currentArchiveType = detectedFormat;
-                parentArchiveFormat = detectedFormat;
-                List<ArchiveEntry> finalEntries = entries;
-                String finalFormat = detectedFormat;
-
-                mainHandler.post(() -> onAnalysisSuccess(fileInfo, finalEntries, finalFormat));
+                mainHandler.post(() -> onAnalysisSuccess(currentRemoteFile, finalEntries, finalFormat));
 
             } catch (Exception e) {
                 e.printStackTrace();
@@ -374,71 +351,19 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
         executor.execute(() -> {
             try {
                 String resolvedUrl = currentRemoteFile.getResolvedUrl();
-                long dataStartOffset;
+                boolean isParentTar = "TAR".equalsIgnoreCase(currentArchiveType) || "NESTED_TAR".equalsIgnoreCase(currentArchiveType);
+                AtomicBoolean scanCancel = new AtomicBoolean(false);
 
-                if ("TAR".equalsIgnoreCase(currentArchiveType) || "NESTED_TAR".equalsIgnoreCase(currentArchiveType)) {
-                    // Entry is directly in a TAR archive
-                    dataStartOffset = tarEntry.getDataOffset();
-                    if (dataStartOffset <= 0) {
-                        dataStartOffset = tarEntry.getHeaderOffset() + 512;
-                    }
-                } else {
-                    // Entry is inside a ZIP archive: resolve Local File Header offset
-                    RemoteZipParser zipParser = new RemoteZipParser(httpClient);
-                    dataStartOffset = zipParser.resolveEntryDataOffset(resolvedUrl, tarEntry);
-                }
+                List<ArchiveEntry> nestedEntries = archiveHeaderService.parseNestedTar(
+                        resolvedUrl,
+                        tarEntry,
+                        isParentTar,
+                        scanCancel,
+                        (stage, details) -> mainHandler.post(() -> setLoading(true, stage, details))
+                );
 
-                // Check compression method:
-                // If Stored (method 0), we can seek and read headers using fast 64KB HTTP Range requests.
-                // If Deflate (method 8), we stream-decompress on the fly to read TAR headers without saving to disk.
-                List<ArchiveEntry> nestedEntries;
-
-                if (tarEntry.getCompressionMethod() == 8) {
-                    mainHandler.post(() -> setLoading(true, "Scanning compressed TAR remotely...",
-                            "Decompressing Deflate stream in real time (headers only, 0 bytes saved to disk)..."));
-
-                    StreamingTarExtractor streamingScanner = new StreamingTarExtractor(httpClient);
-                    AtomicBoolean scanCancel = new AtomicBoolean(false);
-                    nestedEntries = streamingScanner.scanTarEntriesFromCompressedStream(
-                            resolvedUrl,
-                            tarEntry,
-                            scanCancel,
-                            new StreamingTarExtractor.StreamScanListener() {
-                                @Override
-                                public void onScanProgress(long downloadedBytes, long totalCompressedBytes, String statusMessage) {
-                                    mainHandler.post(() -> txtLoadingSubmessage.setText(statusMessage));
-                                }
-
-                                @Override
-                                public void onEntryFound(int count, String fileName) {
-                                    mainHandler.post(() -> txtLoadingSubmessage.setText("Found: " + fileName + " (" + count + " items)..."));
-                                }
-                            }
-                    );
-                } else {
-                    long tarLength = tarEntry.getUncompressedSize();
-
-                    // Check for TAR headers in first 8KB
-                    RemoteTarParser tarParser = new RemoteTarParser(httpClient);
-                    boolean isValidTar = tarParser.verifyTarHeader(resolvedUrl, dataStartOffset);
-                    if (!isValidTar) {
-                        throw new IOException("The entry " + tarEntry.getSimpleFileName() +
-                                " does not contain a standard TAR/ustar header at byte offset " + dataStartOffset);
-                    }
-
-                    mainHandler.post(() -> setLoading(true, "Reading TAR blocks remotely...",
-                            "Parsing nested headers using 64KB HTTP Range requests..."));
-
-                    nestedEntries = tarParser.parseTarAtOffset(
-                            resolvedUrl,
-                            dataStartOffset,
-                            tarLength,
-                            (count, fileName, offset) -> mainHandler.post(() ->
-                                    txtLoadingSubmessage.setText("Found: " + fileName + " (" + count + " items)..."))
-                    );
-                    for (ArchiveEntry e : nestedEntries) {
-                        e.setParentArchiveEntry(tarEntry);
-                    }
+                for (ArchiveEntry e : nestedEntries) {
+                    e.setParentArchiveEntry(tarEntry);
                 }
 
                 mainHandler.post(() -> onNestedTarAnalysisSuccess(tarEntry, nestedEntries));
@@ -796,38 +721,21 @@ public class MainActivity extends AppCompatActivity implements ArchiveAdapter.On
 
         executor.execute(() -> {
             try {
-                File extractedFile;
-                if ("TAR".equalsIgnoreCase(currentArchiveType) || "NESTED_TAR".equalsIgnoreCase(currentArchiveType)) {
-                    RemoteTarParser tarParser = new RemoteTarParser(httpClient);
-                    extractedFile = tarParser.downloadAndExtractEntry(
-                            currentRemoteFile.getResolvedUrl(),
-                            entry,
-                            targetDir,
-                            (bytesRead, totalBytes, stageMessage) -> mainHandler.post(() -> {
-                                txtDownloadStage.setText(stageMessage);
-                                if (totalBytes > 0) {
-                                    progressDownload.setIndeterminate(false);
-                                    int pct = (int) Math.min(100, (bytesRead * 100) / totalBytes);
-                                    progressDownload.setProgress(pct);
-                                }
-                            })
-                    );
-                } else {
-                    RemoteZipParser zipParser = new RemoteZipParser(httpClient);
-                    extractedFile = zipParser.downloadAndExtractEntry(
-                            currentRemoteFile.getResolvedUrl(),
-                            entry,
-                            targetDir,
-                            (bytesRead, totalBytes, stageMessage) -> mainHandler.post(() -> {
-                                txtDownloadStage.setText(stageMessage);
-                                if (totalBytes > 0) {
-                                    progressDownload.setIndeterminate(false);
-                                    int pct = (int) Math.min(100, (bytesRead * 100) / totalBytes);
-                                    progressDownload.setProgress(pct);
-                                }
-                            })
-                    );
-                }
+                boolean isTar = "TAR".equalsIgnoreCase(currentArchiveType) || "NESTED_TAR".equalsIgnoreCase(currentArchiveType);
+                File extractedFile = archiveHeaderService.extractEntry(
+                        currentRemoteFile.getResolvedUrl(),
+                        entry,
+                        isTar,
+                        targetDir,
+                        (bytesRead, totalBytes, stageMessage) -> mainHandler.post(() -> {
+                            txtDownloadStage.setText(stageMessage);
+                            if (totalBytes > 0) {
+                                progressDownload.setIndeterminate(false);
+                                int pct = (int) Math.min(100, (bytesRead * 100) / totalBytes);
+                                progressDownload.setProgress(pct);
+                            }
+                        })
+                );
 
                 lastDownloadedFile = extractedFile;
                 mainHandler.post(() -> {
